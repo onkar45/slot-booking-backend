@@ -30,3 +30,15 @@ class SlotResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class PublicSlotResponse(BaseModel):
+    id: int
+    date: date
+    start_time: time
+    end_time: time
+    is_active: bool
+    is_booked: bool
+    status: str  # "available", "booked", "inactive"
+
+    class Config:
+        from_attributes = True

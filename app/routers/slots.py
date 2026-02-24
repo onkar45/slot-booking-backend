@@ -117,3 +117,50 @@ def activate_slot(
     db.commit()
 
     return {"message": "Slot activated"}
+
+@router.get("/public", response_model=list)
+def get_public_slots(db: Session = Depends(get_db)):
+    """Public endpoint - no authentication required. Shows all slots with booking status."""
+    from app.models.booking import Booking, BookingStatus
+    
+    today = datetime.now(pytz.timezone('Asia/Kolkata')).date()
+    
+    # Auto-deactivate past slots
+    db.query(Slot).filter(
+        Slot.date < today,
+        Slot.is_active == True
+    ).update({"is_active": False})
+    db.commit()
+    
+    # Get all slots
+    slots = db.query(Slot).order_by(Slot.date, Slot.start_time).all()
+    
+    result = []
+    for slot in slots:
+        # Check if slot has approved booking
+        approved_booking = db.query(Booking).filter(
+            Booking.slot_id == slot.id,
+            Booking.status == BookingStatus.approved
+        ).first()
+        
+        is_booked = approved_booking is not None
+        
+        # Determine status
+        if not slot.is_active:
+            status = "inactive"
+        elif is_booked:
+            status = "booked"
+        else:
+            status = "available"
+        
+        result.append({
+            "id": slot.id,
+            "date": slot.date,
+            "start_time": slot.start_time,
+            "end_time": slot.end_time,
+            "is_active": slot.is_active,
+            "is_booked": is_booked,
+            "status": status
+        })
+    
+    return result

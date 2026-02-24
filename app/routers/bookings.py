@@ -151,3 +151,36 @@ def reject_booking(
 
     return {"message": "Booking rejected"}
 
+
+@router.get("/active")
+def get_active_bookings(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Get only active (approved and not expired) bookings for the current user"""
+    from sqlalchemy import and_, func
+    from datetime import datetime, time as dt_time
+    
+    # Get current datetime in Asia/Kolkata timezone
+    now = datetime.now(pytz.timezone('Asia/Kolkata'))
+    current_date = now.date()
+    current_time = now.time()
+    
+    # Query active bookings with database-level filtering
+    active_bookings = db.query(Booking).join(Slot).filter(
+        and_(
+            Booking.user_id == current_user.id,
+            Booking.status == BookingStatus.approved,
+            # Filter out past slots: either future date OR (today AND end_time >= current_time)
+            (Slot.date > current_date) | 
+            (and_(Slot.date == current_date, Slot.end_time >= current_time))
+        )
+    ).options(
+        joinedload(Booking.slot),
+        joinedload(Booking.user)
+    ).all()
+    
+    return {
+        "active_count": len(active_bookings),
+        "active_bookings": active_bookings
+    }
