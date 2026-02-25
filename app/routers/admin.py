@@ -1,0 +1,312 @@
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from app.database import get_db
+from app.models.user import User, UserRole
+from app.schemas.user import AdminUserCreate, AdminUserUpdate, UserResponse
+from app.utils.hash import hash_password
+from app.utils.dependencies import admin_required
+from datetime import datetime, timezone
+
+
+router = APIRouter(prefix="/admin", tags=["Admin"])
+
+
+@router.get("/users", response_model=list[UserResponse])
+def get_all_users(
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_required)
+):
+    """
+    Get all users (Admin only).
+    
+    - Requires admin authentication
+    - Returns list of all users without passwords
+    """
+    users = db.query(User).all()
+    return users
+
+
+@router.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+def create_user(
+    user_data: AdminUserCreate,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_required)
+):
+    """
+    Create a new user account (Admin only).
+    
+    - Requires admin authentication
+    - Name must be unique
+    - Email must be unique
+    - Password will be securely hashed
+    - Role defaults to 'user'
+    - Cannot create admin users (security restriction)
+    """
+    
+    # Check if email already exists
+    existing_email = db.query(User).filter(User.email == user_data.email).first()
+    if existing_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+    
+    # Check if name already exists
+    existing_name = db.query(User).filter(User.name == user_data.name).first()
+    if existing_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Name already taken"
+        )
+    
+    # Validate role - prevent admin creation
+    if user_data.role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot create admin users through this endpoint"
+        )
+    
+    # Validate role enum
+    try:
+        user_role = UserRole(user_data.role)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid role. Must be 'user'"
+        )
+    
+    # Create new user
+    new_user = User(
+        name=user_data.name,
+        email=user_data.email,
+        password=hash_password(user_data.password),
+        role=user_role,
+        created_at=datetime.now(timezone.utc)
+    )
+    
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    return new_user
+
+
+@router.patch("/users/{user_id}", response_model=UserResponse)
+def update_user(
+    user_id: int,
+    user_data: AdminUserUpdate,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_required)
+):
+    """
+    Update user account (Admin only).
+    
+    - Requires admin authentication
+    - Admin cannot edit their own role
+    - Admin cannot modify other admins
+    - Can update: name, email, is_active
+    - Name and email must be unique
+    - Password changes not allowed here
+    """
+    
+    # Fetch user to update
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Prevent admin from modifying other admins
+    if user.role.value == "admin" and user.id != current_admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot modify other admin accounts"
+        )
+    
+    # Prevent admin from editing their own role (if role field existed in update)
+    if user.id == current_admin.id and user_data.is_active is not None:
+        if not user_data.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot deactivate your own account"
+            )
+    
+    # Check name uniqueness if being updated
+    if user_data.name is not None and user_data.name != user.name:
+        existing_name = db.query(User).filter(
+            User.name == user_data.name,
+            User.id != user_id
+        ).first()
+        if existing_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Name already taken"
+            )
+        user.name = user_data.name
+    
+    # Check email uniqueness if being updated
+    if user_data.email is not None and user_data.email != user.email:
+        existing_email = db.query(User).filter(
+            User.email == user_data.email,
+            User.id != user_id
+        ).first()
+        if existing_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+        user.email = user_data.email
+    
+    # Update is_active if provided
+    if user_data.is_active is not None:
+        user.is_active = user_data.is_active
+    
+    db.commit()
+    db.refresh(user)
+    
+    return user
+
+
+@router.patch("/users/{user_id}/activate", response_model=UserResponse)
+def toggle_user_activation(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_required)
+):
+    """
+    Toggle user active status (Admin only).
+    
+    - Requires admin authentication
+    - Activates or deactivates a user account
+    - Cannot deactivate self
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Prevent admin from deactivating themselves
+    if user.id == current_admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot deactivate your own account"
+        )
+    
+    # Toggle is_active status
+    user.is_active = not user.is_active
+    
+    db.commit()
+    db.refresh(user)
+    
+    return user
+
+
+@router.put("/users/{user_id}/activate", response_model=UserResponse)
+def activate_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_required)
+):
+    """
+    Activate a user account (Admin only).
+    
+    - Requires admin authentication
+    - Sets user account to active
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    user.is_active = True
+    
+    db.commit()
+    db.refresh(user)
+    
+    return user
+
+
+@router.put("/users/{user_id}/deactivate", response_model=UserResponse)
+def deactivate_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_required)
+):
+    """
+    Deactivate a user account (Admin only).
+    
+    - Requires admin authentication
+    - Sets user account to inactive
+    - Cannot deactivate self
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Prevent admin from deactivating themselves
+    if user.id == current_admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot deactivate your own account"
+        )
+    
+    user.is_active = False
+    
+    db.commit()
+    db.refresh(user)
+    
+    return user
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_required)
+):
+    """
+    Delete a user (Admin only).
+    
+    - Requires admin authentication
+    - Permanently deletes a user account
+    - Cannot delete self
+    - Cannot delete other admins
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Prevent admin from deleting themselves
+    if user.id == current_admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot delete your own account"
+        )
+    
+    # Prevent admin from deleting other admins
+    if user.role.value == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot delete admin accounts"
+        )
+    
+    db.delete(user)
+    db.commit()
+    
+    return None

@@ -9,6 +9,7 @@ class BookingStatus(str, enum.Enum):
     pending = "pending"
     approved = "approved"
     rejected = "rejected"
+    expired = "expired"
 
 class Booking(Base):
     __tablename__ = "bookings"

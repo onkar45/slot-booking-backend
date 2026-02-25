@@ -31,6 +31,10 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if user is None:
         raise HTTPException(status_code=401, detail="User not found")
 
+    # Check if account is active
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Inactive account")
+
     return user
 
 def admin_required(current_user: User = Depends(get_current_user)):

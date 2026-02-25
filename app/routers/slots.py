@@ -4,7 +4,7 @@ from app.database import get_db
 from app.models.slot import Slot
 from app.schemas.slot import SlotCreate, SlotResponse
 from app.utils.dependencies import admin_required, get_current_user
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
 
@@ -48,8 +48,14 @@ def get_all_slots(
     db: Session = Depends(get_db),
     current_user = Depends(admin_required)
 ):
-    """Get all slots for admin (includes past slots)"""
-    today = datetime.now(pytz.timezone('Asia/Kolkata')).date()
+    """Get all slots for admin (excludes slots older than 2 days)"""
+    now = datetime.now(pytz.timezone('Asia/Kolkata'))
+    today = now.date()
+    
+    # Calculate cutoff datetime (2 days ago)
+    two_days_ago = now - timedelta(days=2)
+    cutoff_date = two_days_ago.date()
+    cutoff_time = two_days_ago.time()
     
     # Auto-deactivate past slots
     db.query(Slot).filter(
@@ -58,7 +64,14 @@ def get_all_slots(
     ).update({"is_active": False})
     db.commit()
     
-    return db.query(Slot).order_by(Slot.date.desc(), Slot.start_time).all()
+    # Fetch all slots excluding those older than 2 days
+    slots = db.query(Slot).filter(
+        # Include slots where slot end datetime >= 2 days ago
+        (Slot.date > cutoff_date) | 
+        ((Slot.date == cutoff_date) & (Slot.end_time >= cutoff_time))
+    ).order_by(Slot.date.desc(), Slot.start_time).all()
+    
+    return slots
 
 @router.get("/available", response_model=list[SlotResponse])
 def get_available_slots(
@@ -120,10 +133,16 @@ def activate_slot(
 
 @router.get("/public", response_model=list)
 def get_public_slots(db: Session = Depends(get_db)):
-    """Public endpoint - no authentication required. Shows all slots with booking status."""
+    """Public endpoint - no authentication required. Shows all slots with booking status (excludes slots older than 2 days)."""
     from app.models.booking import Booking, BookingStatus
     
-    today = datetime.now(pytz.timezone('Asia/Kolkata')).date()
+    now = datetime.now(pytz.timezone('Asia/Kolkata'))
+    today = now.date()
+    
+    # Calculate cutoff datetime (2 days ago)
+    two_days_ago = now - timedelta(days=2)
+    cutoff_date = two_days_ago.date()
+    cutoff_time = two_days_ago.time()
     
     # Auto-deactivate past slots
     db.query(Slot).filter(
@@ -132,8 +151,12 @@ def get_public_slots(db: Session = Depends(get_db)):
     ).update({"is_active": False})
     db.commit()
     
-    # Get all slots
-    slots = db.query(Slot).order_by(Slot.date, Slot.start_time).all()
+    # Get all slots excluding those older than 2 days
+    slots = db.query(Slot).filter(
+        # Include slots where slot end datetime >= 2 days ago
+        (Slot.date > cutoff_date) | 
+        ((Slot.date == cutoff_date) & (Slot.end_time >= cutoff_time))
+    ).order_by(Slot.date, Slot.start_time).all()
     
     result = []
     for slot in slots:

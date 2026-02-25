@@ -13,33 +13,13 @@ import pytz
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-@router.post("/register", response_model=UserResponse)
-def register(user: UserCreate, db: Session = Depends(get_db)):
-    
-    # Check if user exists
-    existing_user = db.query(User).filter(User.email == user.email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    # Validate role
-    try:
-        user_role = UserRole(user.role)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid role. Must be 'user' or 'admin'")
-
-    new_user = User(
-        name=user.name,
-        email=user.email,
-        password=hash_password(user.password),
-        role=user_role,
-        created_at=datetime.now(pytz.timezone('Asia/Kolkata'))
-    )
-
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-
-    return new_user
+# Public registration disabled - use /admin/users endpoint (admin only)
+# @router.post("/register", response_model=UserResponse)
+# def register(user: UserCreate, db: Session = Depends(get_db)):
+#     raise HTTPException(
+#         status_code=403,
+#         detail="Public registration is disabled. Contact administrator."
+#     )
 
 @router.post("/login")
 def login(user: UserLogin, db: Session = Depends(get_db)):
@@ -48,6 +28,13 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
 
     if not db_user:
         raise HTTPException(status_code=400, detail="Invalid email or password")
+
+    # Check if account is active before password verification
+    if not db_user.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail="Your account has been deactivated. Please contact admin."
+        )
 
     if not verify_password(user.password, db_user.password):
         raise HTTPException(status_code=400, detail="Invalid email or password")
@@ -72,6 +59,13 @@ def login_oauth(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
 
     if not db_user:
         raise HTTPException(status_code=400, detail="Invalid email or password")
+
+    # Check if account is active before password verification
+    if not db_user.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail="Your account has been deactivated. Please contact admin."
+        )
 
     if not verify_password(form_data.password, db_user.password):
         raise HTTPException(status_code=400, detail="Invalid email or password")

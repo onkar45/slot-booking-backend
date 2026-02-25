@@ -1,14 +1,46 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import and_
 from app.database import get_db
 from app.models.booking import Booking, BookingStatus
 from app.models.slot import Slot
 from app.schemas.booking import BookingCreate, BookingResponse
 from app.utils.dependencies import get_current_user, admin_required
-from datetime import datetime
+from datetime import datetime, time as dt_time, timedelta
 import pytz
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
+
+
+def expire_pending_bookings(db: Session):
+    """
+    Automatically mark expired pending bookings.
+    
+    Finds all pending bookings where the slot end datetime has passed
+    and updates their status to 'expired'.
+    """
+    # Get current datetime in Asia/Kolkata timezone
+    now = datetime.now(pytz.timezone('Asia/Kolkata'))
+    current_date = now.date()
+    current_time = now.time()
+    
+    # Find all pending bookings with expired slots
+    expired_bookings = db.query(Booking).join(Slot).filter(
+        and_(
+            Booking.status == BookingStatus.pending,
+            # Slot is in the past: either past date OR (today AND end_time < current_time)
+            (Slot.date < current_date) | 
+            (and_(Slot.date == current_date, Slot.end_time < current_time))
+        )
+    ).all()
+    
+    # Bulk update to expired status
+    if expired_bookings:
+        for booking in expired_bookings:
+            booking.status = BookingStatus.expired
+        db.commit()
+    
+    return len(expired_bookings)
 
 @router.post("/", response_model=BookingResponse)
 def book_slot(
@@ -73,11 +105,26 @@ def my_bookings(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    return db.query(Booking).options(
+    # Automatically expire pending bookings before fetching
+    expire_pending_bookings(db)
+    
+    # Calculate cutoff datetime (2 days ago)
+    now = datetime.now(pytz.timezone('Asia/Kolkata'))
+    two_days_ago = now - timedelta(days=2)
+    cutoff_date = two_days_ago.date()
+    cutoff_time = two_days_ago.time()
+    
+    # Fetch bookings excluding those older than 2 days
+    return db.query(Booking).join(Slot).options(
         joinedload(Booking.slot),
         joinedload(Booking.user)
     ).filter(
-        Booking.user_id == current_user.id
+        and_(
+            Booking.user_id == current_user.id,
+            # Include bookings where slot end datetime >= 2 days ago
+            (Slot.date > cutoff_date) | 
+            (and_(Slot.date == cutoff_date, Slot.end_time >= cutoff_time))
+        )
     ).all()
 
 @router.get("/", response_model=list[BookingResponse])
@@ -85,9 +132,23 @@ def get_all_bookings(
     db: Session = Depends(get_db),
     current_user = Depends(admin_required)
 ):
-    return db.query(Booking).options(
+    # Automatically expire pending bookings before fetching
+    expire_pending_bookings(db)
+    
+    # Calculate cutoff datetime (2 days ago)
+    now = datetime.now(pytz.timezone('Asia/Kolkata'))
+    two_days_ago = now - timedelta(days=2)
+    cutoff_date = two_days_ago.date()
+    cutoff_time = two_days_ago.time()
+    
+    # Fetch all bookings excluding those older than 2 days
+    return db.query(Booking).join(Slot).options(
         joinedload(Booking.slot),
         joinedload(Booking.user)
+    ).filter(
+        # Include bookings where slot end datetime >= 2 days ago
+        (Slot.date > cutoff_date) | 
+        (and_(Slot.date == cutoff_date, Slot.end_time >= cutoff_time))
     ).all()
 
 @router.put("/{booking_id}/approve")
@@ -108,10 +169,13 @@ def approve_booking(
     if booking.status == BookingStatus.rejected:
         raise HTTPException(status_code=400, detail="Cannot approve rejected booking")
 
-    # Check if slot still exists and is active
+    if booking.status == BookingStatus.expired:
+        raise HTTPException(status_code=400, detail="Cannot approve expired booking")
+
+    # Check if slot still exists
     slot = db.query(Slot).filter(Slot.id == booking.slot_id).first()
-    if not slot or not slot.is_active:
-        raise HTTPException(status_code=400, detail="Slot is not available")
+    if not slot:
+        raise HTTPException(status_code=400, detail="Slot not found")
 
     # Double safety check
     existing_approved = db.query(Booking).filter(
