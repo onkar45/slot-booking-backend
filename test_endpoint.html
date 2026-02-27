@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Approved Bookings Endpoint</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .booking {
+            background: #f0f0f0;
+            padding: 10px;
+            margin: 10px 0;
+            border-left: 4px solid #ff0000;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .error {
+            color: red;
+            padding: 10px;
+            background: #ffe0e0;
+        }
+        .success {
+            color: green;
+            padding: 10px;
+            background: #e0ffe0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Test Approved Bookings Endpoint</h1>
+    <button onclick="fetchBookings()">Fetch Approved Bookings</button>
+    <div id="result"></div>
+
+    <script>
+        async function fetchBookings() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '<p>Loading...</p>';
+            
+            try {
+                const response = await fetch('http://127.0.0.1:8000/bookings/approved-public');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const bookings = await response.json();
+                
+                console.log('📊 Fetched bookings:', bookings);
+                console.log('📈 Total bookings:', bookings.length);
+                
+                if (bookings.length === 0) {
+                    resultDiv.innerHTML = '<div class="error">No approved bookings found!</div>';
+                    return;
+                }
+                
+                let html = `<div class="success">✅ Successfully fetched ${bookings.length} approved bookings!</div>`;
+                html += '<h2>Approved Bookings (Red = Booked Slots):</h2>';
+                
+                bookings.forEach(booking => {
+                    html += `
+                        <div class="booking">
+                            <strong>ID:</strong> ${booking.id}<br>
+                            <strong>Date:</strong> ${booking.booking_date}<br>
+                            <strong>Time:</strong> ${booking.start_time} - ${booking.end_time}
+                        </div>
+                    `;
+                });
+                
+                resultDiv.innerHTML = html;
+                
+            } catch (error) {
+                console.error('❌ Error:', error);
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <strong>Error fetching bookings:</strong><br>
+                        ${error.message}<br><br>
+                        <strong>Possible issues:</strong><br>
+                        1. Backend server not running (run: uvicorn app.main:app --reload)<br>
+                        2. Wrong URL (check if backend is on port 8000)<br>
+                        3. CORS issue (check browser console)
+                    </div>
+                `;
+            }
+        }
+    </script>
+</body>
+</html>
