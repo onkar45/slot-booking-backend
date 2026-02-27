@@ -188,6 +188,18 @@ Content-Type: application/json
   "duration_minutes": 30
 }
 ```
+
+**⚠️ IMPORTANT - Request Format:**
+- ✅ **CORRECT**: Send `duration_minutes` (30, 60, 90, or 120)
+- ❌ **WRONG**: Do NOT send `end_time` or `description` fields
+- The API calculates `end_time` automatically from `start_time + duration_minutes`
+
+**Allowed Durations:**
+- `30` minutes = 1 slot
+- `60` minutes = 1 slot
+- `90` minutes = 1.5 slots
+- `120` minutes = 2 slots
+
 **Response:**
 ```json
 {
