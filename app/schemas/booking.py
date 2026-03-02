@@ -14,6 +14,7 @@ class BookingCreate(BaseModel):
     date: date
     start_time: time
     duration_minutes: int
+    description: Optional[str] = None  # New optional field
     
     @field_validator('duration_minutes')
     @classmethod
@@ -31,6 +32,13 @@ class BookingCreate(BaseModel):
         if v < dt_date.today():
             raise ValueError('Cannot book for past dates')
         return v
+    
+    @field_validator('description')
+    @classmethod
+    def validate_description(cls, v):
+        if v is not None and len(v) > 500:
+            raise ValueError('Description cannot exceed 500 characters')
+        return v
 
 class BookingResponse(BaseModel):
     id: int
@@ -39,6 +47,7 @@ class BookingResponse(BaseModel):
     start_time: time
     end_time: time
     status: str
+    description: Optional[str] = None  # New field in response
     created_at: datetime
     user: UserInfo
 

@@ -130,7 +130,7 @@ def create_booking(
                 Booking.date == booking.date,
                 Booking.status.in_([BookingStatus.pending, BookingStatus.approved]),
                 Booking.start_time < end_time,
-                Booking.end_time > start_time
+                Booking.end_time > booking.start_time
             )
         ).first()
         
@@ -146,11 +146,14 @@ def create_booking(
             )
     
     # Create new booking (single record that spans the entire duration)
+    print(f"🔍 DEBUG: Received description: {booking.description}")
+    
     new_booking = Booking(
         user_id=current_user.id,
         date=booking.date,
         start_time=booking.start_time,
         end_time=end_time,
+        description=booking.description,  # Store description
         status=BookingStatus.pending,
         created_at=datetime.now(pytz.timezone('Asia/Kolkata'))
     )
@@ -158,6 +161,8 @@ def create_booking(
     db.add(new_booking)
     db.commit()
     db.refresh(new_booking)
+    
+    print(f"🔍 DEBUG: Stored description in DB: {new_booking.description}")
     
     # Load user relationship
     db_booking = db.query(Booking).options(
@@ -276,7 +281,7 @@ def get_active_bookings(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    """Get only active (approved and not expired) bookings for the current user."""
+    """Get only active (approved and not expired/cancelled) bookings for the current user."""
     
     now = datetime.now(pytz.timezone('Asia/Kolkata'))
     current_date = now.date()
@@ -428,4 +433,66 @@ def get_approved_bookings_debug(
             }
             for b in approved_bookings
         ]
+    }
+
+
+@router.patch("/{booking_id}/cancel")
+def cancel_booking(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """
+    Cancel a booking (User can cancel their own, Admin can cancel any).
+    
+    - Changes status to 'cancelled'
+    - Records who cancelled and when
+    - Cannot cancel past bookings
+    - Cannot cancel already cancelled/rejected bookings
+    """
+    
+    # Get booking
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    
+    # Authorization check
+    is_admin = current_user.role.value == "admin"
+    is_owner = booking.user_id == current_user.id
+    
+    if not (is_admin or is_owner):
+        raise HTTPException(
+            status_code=403, 
+            detail="Not authorized to cancel this booking"
+        )
+    
+    # Validate booking can be cancelled
+    if booking.status == BookingStatus.cancelled:
+        raise HTTPException(status_code=400, detail="Booking is already cancelled")
+    
+    if booking.status == BookingStatus.rejected:
+        raise HTTPException(status_code=400, detail="Cannot cancel rejected booking")
+    
+    # Check if booking is in the past
+    now = datetime.now(pytz.timezone('Asia/Kolkata'))
+    booking_datetime = datetime.combine(booking.date, booking.end_time)
+    booking_datetime = pytz.timezone('Asia/Kolkata').localize(booking_datetime)
+    
+    if booking_datetime < now:
+        raise HTTPException(status_code=400, detail="Cannot cancel past bookings")
+    
+    # Cancel the booking
+    booking.status = BookingStatus.cancelled
+    booking.cancelled_at = datetime.now(pytz.timezone('Asia/Kolkata'))
+    booking.cancelled_by = current_user.id
+    
+    db.commit()
+    db.refresh(booking)
+    
+    return {
+        "message": "Booking cancelled successfully",
+        "booking_id": booking.id,
+        "cancelled_at": booking.cancelled_at,
+        "cancelled_by": current_user.name
     }

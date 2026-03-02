@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, ForeignKey, Enum, DateTime, Date, Time
+from sqlalchemy import Column, Integer, ForeignKey, Enum, DateTime, Date, Time, Text
 from sqlalchemy.orm import relationship
 from app.database import Base
 import enum
@@ -10,6 +10,7 @@ class BookingStatus(str, enum.Enum):
     approved = "approved"
     rejected = "rejected"
     expired = "expired"
+    cancelled = "cancelled"  # New status
 
 class Booking(Base):
     __tablename__ = "bookings"
@@ -23,6 +24,12 @@ class Booking(Base):
     end_time = Column(Time, nullable=True)
     
     status = Column(Enum(BookingStatus), default=BookingStatus.pending)
+    description = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(pytz.timezone('Asia/Kolkata')))
+    
+    # Cancellation tracking fields
+    cancelled_at = Column(DateTime, nullable=True)
+    cancelled_by = Column(Integer, ForeignKey("users.id"), nullable=True)
 
-    user = relationship("User")
+    user = relationship("User", foreign_keys=[user_id])
+    cancelled_by_user = relationship("User", foreign_keys=[cancelled_by])

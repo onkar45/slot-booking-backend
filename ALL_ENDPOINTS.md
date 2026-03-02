@@ -185,13 +185,15 @@ Content-Type: application/json
 {
   "date": "2026-02-28",
   "start_time": "10:00:00",
-  "duration_minutes": 30
+  "duration_minutes": 30,
+  "description": "Need to discuss project requirements"
 }
 ```
 
 **⚠️ IMPORTANT - Request Format:**
 - ✅ **CORRECT**: Send `duration_minutes` (30, 60, 90, or 120)
-- ❌ **WRONG**: Do NOT send `end_time` or `description` fields
+- ✅ **OPTIONAL**: Send `description` (max 500 characters)
+- ❌ **WRONG**: Do NOT send `end_time` field
 - The API calculates `end_time` automatically from `start_time + duration_minutes`
 
 **Allowed Durations:**
@@ -209,6 +211,7 @@ Content-Type: application/json
   "start_time": "10:00:00",
   "end_time": "10:30:00",
   "status": "pending",
+  "description": "Need to discuss project requirements",
   "created_at": "2026-02-26T11:30:00",
   "user": {
     "id": 5,
