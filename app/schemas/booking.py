@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, field_validator, EmailStr
 from datetime import datetime, date, time
 from typing import Optional
 
@@ -14,7 +14,13 @@ class BookingCreate(BaseModel):
     date: date
     start_time: time
     duration_minutes: int
-    description: Optional[str] = None  # New optional field
+    description: Optional[str] = None
+    
+    # New fields for company/HR information
+    company_name: Optional[str] = None
+    hr_name: Optional[str] = None
+    mobile_number: Optional[str] = None
+    email_id: Optional[EmailStr] = None
     
     @field_validator('duration_minutes')
     @classmethod
@@ -39,6 +45,30 @@ class BookingCreate(BaseModel):
         if v is not None and len(v) > 500:
             raise ValueError('Description cannot exceed 500 characters')
         return v
+    
+    @field_validator('company_name')
+    @classmethod
+    def validate_company_name(cls, v):
+        if v is not None and len(v.strip()) < 2:
+            raise ValueError('Company name must be at least 2 characters')
+        return v.strip() if v else None
+    
+    @field_validator('hr_name')
+    @classmethod
+    def validate_hr_name(cls, v):
+        if v is not None and len(v.strip()) < 2:
+            raise ValueError('HR name must be at least 2 characters')
+        return v.strip() if v else None
+    
+    @field_validator('mobile_number')
+    @classmethod
+    def validate_mobile_number(cls, v):
+        if v is not None:
+            # Remove spaces and dashes
+            cleaned = v.replace(' ', '').replace('-', '')
+            if not cleaned.isdigit() or len(cleaned) < 10:
+                raise ValueError('Mobile number must be at least 10 digits')
+        return v
 
 class BookingResponse(BaseModel):
     id: int
@@ -47,7 +77,14 @@ class BookingResponse(BaseModel):
     start_time: time
     end_time: time
     status: str
-    description: Optional[str] = None  # New field in response
+    description: Optional[str] = None
+    
+    # New fields in response
+    company_name: Optional[str] = None
+    hr_name: Optional[str] = None
+    mobile_number: Optional[str] = None
+    email_id: Optional[str] = None
+    
     created_at: datetime
     user: UserInfo
 

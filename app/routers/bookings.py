@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_
 from app.database import get_db
 from app.models.booking import Booking, BookingStatus
+from app.models.blocked_date import BlockedDate
 from app.schemas.booking import BookingCreate, BookingResponse, PublicBookingResponse
 from app.utils.dependencies import get_current_user, admin_required
 from datetime import datetime, time as dt_time, timedelta, date as dt_date
@@ -103,6 +104,18 @@ def create_booking(
     Automatically prevents double-booking by checking ALL users' bookings.
     """
     
+    # ✅ CHECK IF DATE IS BLOCKED
+    blocked_date = db.query(BlockedDate).filter(
+        BlockedDate.date == booking.date
+    ).first()
+    
+    if blocked_date:
+        reason_msg = f": {blocked_date.reason}" if blocked_date.reason else ""
+        raise HTTPException(
+            status_code=400,
+            detail=f"All slots are unavailable for this date{reason_msg}"
+        )
+    
     # Calculate end_time based on duration
     start_datetime = datetime.combine(booking.date, booking.start_time)
     end_datetime = start_datetime + timedelta(minutes=booking.duration_minutes)
@@ -147,13 +160,21 @@ def create_booking(
     
     # Create new booking (single record that spans the entire duration)
     print(f"🔍 DEBUG: Received description: {booking.description}")
+    print(f"🔍 DEBUG: Received company_name: {booking.company_name}")
+    print(f"🔍 DEBUG: Received hr_name: {booking.hr_name}")
+    print(f"🔍 DEBUG: Received mobile_number: {booking.mobile_number}")
+    print(f"🔍 DEBUG: Received email_id: {booking.email_id}")
     
     new_booking = Booking(
         user_id=current_user.id,
         date=booking.date,
         start_time=booking.start_time,
         end_time=end_time,
-        description=booking.description,  # Store description
+        description=booking.description,
+        company_name=booking.company_name,
+        hr_name=booking.hr_name,
+        mobile_number=booking.mobile_number,
+        email_id=booking.email_id,
         status=BookingStatus.pending,
         created_at=datetime.now(pytz.timezone('Asia/Kolkata'))
     )

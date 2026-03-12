@@ -1,11 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.models.user import User, UserRole
+from app.models.blocked_date import BlockedDate
 from app.schemas.user import AdminUserCreate, AdminUserUpdate, UserResponse
+from app.schemas.blocked_date import BlockedDateCreate, BlockedDateResponse, BlockedDateWithCreator
 from app.utils.hash import hash_password
 from app.utils.dependencies import admin_required
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date as dt_date
+import pytz
 
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -310,3 +313,141 @@ def delete_user(
     db.commit()
     
     return None
+
+
+# ==================== BLOCKED DATES ENDPOINTS ====================
+
+@router.post("/block-date", response_model=BlockedDateResponse, status_code=status.HTTP_201_CREATED)
+def block_date(
+    blocked_date: BlockedDateCreate,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_required)
+):
+    """
+    Block a date so no bookings can be made (Admin only).
+    
+    - Requires admin authentication
+    - Date must be in the future
+    - Prevents duplicate blocked dates
+    - Optional reason can be provided
+    """
+    
+    # Check if date is already blocked
+    existing_blocked = db.query(BlockedDate).filter(
+        BlockedDate.date == blocked_date.date
+    ).first()
+    
+    if existing_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Date {blocked_date.date} is already blocked"
+        )
+    
+    # Create blocked date
+    new_blocked_date = BlockedDate(
+        date=blocked_date.date,
+        reason=blocked_date.reason,
+        created_by=current_admin.id,
+        created_at=datetime.now(pytz.timezone('Asia/Kolkata'))
+    )
+    
+    db.add(new_blocked_date)
+    db.commit()
+    db.refresh(new_blocked_date)
+    
+    return new_blocked_date
+
+
+@router.get("/blocked-dates", response_model=list[BlockedDateWithCreator])
+def get_blocked_dates(
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_required)
+):
+    """
+    Get all blocked dates (Admin only).
+    
+    - Requires admin authentication
+    - Returns list of all blocked dates with creator info
+    - Sorted by date ascending
+    """
+    
+    blocked_dates = db.query(BlockedDate).options(
+        joinedload(BlockedDate.creator)
+    ).order_by(BlockedDate.date).all()
+    
+    # Format response with creator info
+    result = []
+    for blocked in blocked_dates:
+        result.append({
+            "id": blocked.id,
+            "date": blocked.date,
+            "reason": blocked.reason,
+            "created_by": blocked.created_by,
+            "created_at": blocked.created_at,
+            "creator": {
+                "id": blocked.creator.id,
+                "name": blocked.creator.name,
+                "email": blocked.creator.email
+            }
+        })
+    
+    return result
+
+
+@router.delete("/unblock-date/{blocked_date_id}", status_code=status.HTTP_200_OK)
+def unblock_date(
+    blocked_date_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_required)
+):
+    """
+    Remove a blocked date (Admin only).
+    
+    - Requires admin authentication
+    - Allows bookings to be made on that date again
+    """
+    
+    blocked_date = db.query(BlockedDate).filter(
+        BlockedDate.id == blocked_date_id
+    ).first()
+    
+    if not blocked_date:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Blocked date not found"
+        )
+    
+    db.delete(blocked_date)
+    db.commit()
+    
+    return {
+        "message": f"Date {blocked_date.date} has been unblocked",
+        "date": blocked_date.date
+    }
+
+
+@router.get("/blocked-dates/check/{date}")
+def check_date_blocked(
+    date: dt_date,
+    db: Session = Depends(get_db)
+):
+    """
+    Check if a specific date is blocked (Public endpoint).
+    
+    - No authentication required
+    - Returns whether the date is blocked and reason
+    """
+    
+    blocked = db.query(BlockedDate).filter(BlockedDate.date == date).first()
+    
+    if blocked:
+        return {
+            "is_blocked": True,
+            "date": date,
+            "reason": blocked.reason
+        }
+    
+    return {
+        "is_blocked": False,
+        "date": date
+    }

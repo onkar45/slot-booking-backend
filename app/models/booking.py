@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, ForeignKey, Enum, DateTime, Date, Time, Text
+from sqlalchemy import Column, Integer, ForeignKey, Enum, DateTime, Date, Time, Text, String
 from sqlalchemy.orm import relationship
 from app.database import Base
 import enum
@@ -10,7 +10,7 @@ class BookingStatus(str, enum.Enum):
     approved = "approved"
     rejected = "rejected"
     expired = "expired"
-    cancelled = "cancelled"  # New status
+    cancelled = "cancelled"
 
 class Booking(Base):
     __tablename__ = "bookings"
@@ -18,13 +18,20 @@ class Booking(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     
-    # Dynamic time-based fields (nullable=True to match migration)
+    # Dynamic time-based fields
     date = Column(Date, nullable=True)
     start_time = Column(Time, nullable=True)
     end_time = Column(Time, nullable=True)
     
     status = Column(Enum(BookingStatus), default=BookingStatus.pending)
     description = Column(Text, nullable=True)
+    
+    # New fields for company/HR information
+    company_name = Column(String(255), nullable=True)
+    hr_name = Column(String(255), nullable=True)
+    mobile_number = Column(String(20), nullable=True)
+    email_id = Column(String(255), nullable=True)
+    
     created_at = Column(DateTime, default=lambda: datetime.now(pytz.timezone('Asia/Kolkata')))
     
     # Cancellation tracking fields
