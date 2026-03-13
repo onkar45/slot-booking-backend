@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 class UserRole(str, enum.Enum):
     user = "user"
     admin = "admin"
+    super_admin = "super_admin"
 
 class User(Base):
     __tablename__ = "users"

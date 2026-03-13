@@ -41,3 +41,8 @@ def admin_required(current_user: User = Depends(get_current_user)):
     if current_user.role.value != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
+
+def super_admin_required(current_user: User = Depends(get_current_user)):
+    if current_user.role.value != "super_admin":
+        raise HTTPException(status_code=403, detail="Super Admin access required")
+    return current_user

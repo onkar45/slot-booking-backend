@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.models.blocked_date import BlockedDate
+from app.models.login_activity import LoginActivity
 from app.schemas.user import AdminUserCreate, AdminUserUpdate, UserResponse
 from app.schemas.blocked_date import BlockedDateCreate, BlockedDateResponse, BlockedDateWithCreator
 from app.utils.hash import hash_password
@@ -451,3 +452,95 @@ def check_date_blocked(
         "is_blocked": False,
         "date": date
     }
+
+
+# ==================== LOGIN ACTIVITY ENDPOINTS ====================
+
+@router.get("/login-activity")
+def get_login_activity(
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_required)
+):
+    """
+    Get all login activities with user details (Admin only).
+    
+    - Requires admin authentication
+    - Returns login history with user information
+    - Sorted by login time (most recent first)
+    """
+    
+    # Fetch all login activities with user relationship
+    activities = db.query(LoginActivity).options(
+        joinedload(LoginActivity.user)
+    ).order_by(LoginActivity.login_time.desc()).all()
+    
+    # Format response with user details
+    result = []
+    for activity in activities:
+        user_data = None
+        if activity.user:
+            user_data = {
+                "id": activity.user.id,
+                "name": activity.user.name,
+                "email": activity.user.email,
+                "username": getattr(activity.user, 'username', None)
+            }
+        
+        result.append({
+            "id": activity.id,
+            "user_id": activity.user_id,
+            "ip_address": activity.ip_address,
+            "user_agent": activity.user_agent,
+            "login_time": activity.login_time,
+            "user": user_data
+        })
+    
+    return result
+
+
+@router.get("/login-activity/{user_id}")
+def get_user_login_activity(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(admin_required)
+):
+    """
+    Get login activities for a specific user (Admin only).
+    
+    - Requires admin authentication
+    - Returns login history for specified user
+    - Sorted by login time (most recent first)
+    """
+    
+    # Check if user exists
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Fetch user's login activities
+    activities = db.query(LoginActivity).filter(
+        LoginActivity.user_id == user_id
+    ).order_by(LoginActivity.login_time.desc()).all()
+    
+    # Format response
+    result = []
+    for activity in activities:
+        result.append({
+            "id": activity.id,
+            "user_id": activity.user_id,
+            "ip_address": activity.ip_address,
+            "user_agent": activity.user_agent,
+            "login_time": activity.login_time,
+            "user": {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "username": getattr(user, 'username', None)
+            }
+        })
+    
+    return result
+

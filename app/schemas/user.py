@@ -48,8 +48,8 @@ class AdminUserCreate(BaseModel):
     @field_validator('role')
     @classmethod
     def validate_role(cls, v):
-        if v not in ["user", "admin"]:
-            raise ValueError('Role must be either "user" or "admin"')
+        if v not in ["user", "admin", "super_admin"]:
+            raise ValueError('Role must be "user", "admin" or "super_admin"')
         return v
 
 class AdminUserUpdate(BaseModel):

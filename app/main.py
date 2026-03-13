@@ -2,8 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base
-from app.routers import auth, bookings, admin, public
-from app.models import user, booking, blocked_date
+from app.routers import auth, bookings, admin, public, super_admin
+from app.models import user, booking, blocked_date, login_activity
 
 app = FastAPI()
 
@@ -29,6 +29,7 @@ Base.metadata.create_all(bind=engine)
 app.include_router(auth.router)
 app.include_router(bookings.router)
 app.include_router(admin.router)
+app.include_router(super_admin.router)
 app.include_router(public.router)
 
 @app.get("/")
