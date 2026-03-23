@@ -23,7 +23,7 @@ def upgrade() -> None:
     """Upgrade schema - Add date/time columns and remove slot_id."""
     
     # Step 1: Add new columns as nullable (keep them nullable to avoid constraint issues)
-    op.add_column('bookings', sa.Column('date', sa.Date(), nullable=True))
+  #  op.add_column('bookings', sa.Column('date', sa.Date(), nullable=True))
     op.add_column('bookings', sa.Column('start_time', sa.Time(), nullable=True))
     op.add_column('bookings', sa.Column('end_time', sa.Time(), nullable=True))
     
