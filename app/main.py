@@ -8,9 +8,9 @@ from app.models import user, booking, blocked_date, login_activity
 app = FastAPI()
 
 origins = [
-    # "https://www.cernsystem.com",
-    # "https://cernsystem.com",
-    # "https://slotbooking.cernsystem.com",
+    "https://www.cernsystem.com",
+    "https://cernsystem.com",
+    "https://slotbooking.cernsystem.com",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
