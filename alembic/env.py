@@ -35,6 +35,9 @@ if config.config_file_name is not None:
 from app.database import Base
 from app.models.user import User
 from app.models.booking import Booking
+from app.models.blocked_date import BlockedDate
+from app.models.login_activity import LoginActivity
+from app.models.organization import Organization
 
 target_metadata = Base.metadata
 

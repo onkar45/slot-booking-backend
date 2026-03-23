@@ -1,13 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.models.blocked_date import BlockedDate
 from app.models.login_activity import LoginActivity
+from app.models.organization import Organization
 from app.schemas.user import AdminUserCreate, AdminUserUpdate, UserResponse
 from app.schemas.blocked_date import BlockedDateCreate, BlockedDateResponse, BlockedDateWithCreator
 from app.utils.hash import hash_password
-from app.utils.dependencies import admin_required
+from app.utils.dependencies import admin_required, get_current_organization
 from datetime import datetime, timezone, date as dt_date
 import pytz
 
@@ -17,35 +18,25 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 
 @router.get("/users", response_model=list[UserResponse])
 def get_all_users(
+    request: Request,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_required)
+    current_admin: User = Depends(admin_required),
+    current_org: Organization = Depends(get_current_organization)
 ):
-    """
-    Get all users (Admin only).
-    
-    - Requires admin authentication
-    - Returns list of all users without passwords
-    """
-    users = db.query(User).all()
+    """Get all users in the current organization (Admin only)."""
+    users = db.query(User).filter(User.organization_id == current_org.id).all()
     return users
 
 
 @router.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(
     user_data: AdminUserCreate,
+    request: Request,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_required)
+    current_admin: User = Depends(admin_required),
+    current_org: Organization = Depends(get_current_organization)
 ):
-    """
-    Create a new user account (Admin only).
-    
-    - Requires admin authentication
-    - Name must be unique
-    - Email must be unique
-    - Password will be securely hashed
-    - Role defaults to 'user'
-    - Cannot create admin users (security restriction)
-    """
+    """Create a new user account scoped to the current organization (Admin only)."""
     
     # Check if email already exists
     existing_email = db.query(User).filter(User.email == user_data.email).first()
@@ -85,7 +76,8 @@ def create_user(
         email=user_data.email,
         password=hash_password(user_data.password),
         role=user_role,
-        created_at=datetime.now(timezone.utc)
+        organization_id=current_org.id,
+        created_at=datetime.now(pytz.timezone('Asia/Kolkata'))
     )
     
     db.add(new_user)
@@ -321,21 +313,17 @@ def delete_user(
 @router.post("/block-date", response_model=BlockedDateResponse, status_code=status.HTTP_201_CREATED)
 def block_date(
     blocked_date: BlockedDateCreate,
+    request: Request,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_required)
+    current_admin: User = Depends(admin_required),
+    current_org: Organization = Depends(get_current_organization)
 ):
-    """
-    Block a date so no bookings can be made (Admin only).
+    """Block a date for the current organization (Admin only)."""
     
-    - Requires admin authentication
-    - Date must be in the future
-    - Prevents duplicate blocked dates
-    - Optional reason can be provided
-    """
-    
-    # Check if date is already blocked
+    # Check if date is already blocked for this org
     existing_blocked = db.query(BlockedDate).filter(
-        BlockedDate.date == blocked_date.date
+        BlockedDate.date == blocked_date.date,
+        BlockedDate.organization_id == current_org.id
     ).first()
     
     if existing_blocked:
@@ -344,11 +332,11 @@ def block_date(
             detail=f"Date {blocked_date.date} is already blocked"
         )
     
-    # Create blocked date
     new_blocked_date = BlockedDate(
         date=blocked_date.date,
         reason=blocked_date.reason,
         created_by=current_admin.id,
+        organization_id=current_org.id,
         created_at=datetime.now(pytz.timezone('Asia/Kolkata'))
     )
     
@@ -361,19 +349,17 @@ def block_date(
 
 @router.get("/blocked-dates", response_model=list[BlockedDateWithCreator])
 def get_blocked_dates(
+    request: Request,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(admin_required)
+    current_admin: User = Depends(admin_required),
+    current_org: Organization = Depends(get_current_organization)
 ):
-    """
-    Get all blocked dates (Admin only).
-    
-    - Requires admin authentication
-    - Returns list of all blocked dates with creator info
-    - Sorted by date ascending
-    """
+    """Get all blocked dates for the current organization (Admin only)."""
     
     blocked_dates = db.query(BlockedDate).options(
         joinedload(BlockedDate.creator)
+    ).filter(
+        BlockedDate.organization_id == current_org.id
     ).order_by(BlockedDate.date).all()
     
     # Format response with creator info

@@ -1,11 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_
 from app.database import get_db
 from app.models.booking import Booking, BookingStatus
 from app.models.blocked_date import BlockedDate
 from app.schemas.booking import BookingCreate, BookingResponse, PublicBookingResponse
-from app.utils.dependencies import get_current_user, admin_required
+from app.utils.dependencies import get_current_user, admin_required, get_current_organization
+from app.models.organization import Organization
 from datetime import datetime, time as dt_time, timedelta, date as dt_date
 from typing import List
 import pytz
@@ -51,122 +52,86 @@ def validate_business_hours(start_time: dt_time, end_time: dt_time) -> bool:
     return start_time >= BUSINESS_START and end_time <= BUSINESS_END
 
 
-def check_overlap(db: Session, user_id: int, booking_date: dt_date, 
-                  start_time: dt_time, end_time: dt_time, exclude_booking_id: int = None) -> bool:
-    """
-    Check if booking overlaps with existing bookings from ANY user.
-    Returns True if overlap exists, False otherwise.
-    
-    This prevents double-booking by checking ALL approved/pending bookings,
-    not just the current user's bookings.
-    """
+def check_overlap(db: Session, user_id: int, booking_date: dt_date,
+                  start_time: dt_time, end_time: dt_time, exclude_booking_id: int = None, org_id: int = None) -> bool:
+    """Check if booking overlaps with existing bookings within the same organization."""
     query = db.query(Booking).filter(
         and_(
             Booking.date == booking_date,
-            # Check ALL users' bookings, not just current user
             Booking.status.in_([BookingStatus.pending, BookingStatus.approved]),
-            # Overlap condition: new booking overlaps if:
-            # - it starts before existing booking ends AND
-            # - it ends after existing booking starts
             Booking.start_time < end_time,
             Booking.end_time > start_time
         )
     )
-    
+
+    if org_id is not None:
+        query = query.filter(Booking.organization_id == org_id)
+
     if exclude_booking_id:
         query = query.filter(Booking.id != exclude_booking_id)
-    
+
     overlapping_booking = query.first()
-    
+
     if overlapping_booking:
         print(f"⚠️  Overlap detected with booking ID {overlapping_booking.id}")
-        print(f"   Existing: {overlapping_booking.start_time} - {overlapping_booking.end_time}")
-        print(f"   Requested: {start_time} - {end_time}")
-    
+
     return overlapping_booking is not None
 
 
 @router.post("/", response_model=BookingResponse)
 def create_booking(
     booking: BookingCreate,
+    request: Request,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_user),
+    current_org: Organization = Depends(get_current_organization)
 ):
-    """
-    Create a new booking with dynamic time selection.
-    
-    Supports multi-slot bookings:
-    - 30 min = 1 slot
-    - 60 min = 1 slot  
-    - 90 min = 1.5 slots (blocks 9:00-10:30)
-    - 120 min = 2 slots (blocks 9:00-11:00)
-    
-    Automatically prevents double-booking by checking ALL users' bookings.
-    """
-    
-    # ✅ CHECK IF DATE IS BLOCKED
+    """Create a new booking scoped to the current organization."""
+
+    # Check if date is blocked (scoped to org)
     blocked_date = db.query(BlockedDate).filter(
-        BlockedDate.date == booking.date
+        BlockedDate.date == booking.date,
+        BlockedDate.organization_id == current_org.id
     ).first()
-    
+
     if blocked_date:
         reason_msg = f": {blocked_date.reason}" if blocked_date.reason else ""
-        raise HTTPException(
-            status_code=400,
-            detail=f"All slots are unavailable for this date{reason_msg}"
-        )
-    
-    # Calculate end_time based on duration
+        raise HTTPException(status_code=400, detail=f"All slots are unavailable for this date{reason_msg}")
+
     start_datetime = datetime.combine(booking.date, booking.start_time)
     end_datetime = start_datetime + timedelta(minutes=booking.duration_minutes)
     end_time = end_datetime.time()
-    
-    # Check if booking extends to next day (shouldn't happen with business hours)
+
     if end_datetime.date() > booking.date:
-        raise HTTPException(
-            status_code=400,
-            detail="Booking duration extends beyond the selected date"
-        )
-    
-    # Validate business hours
+        raise HTTPException(status_code=400, detail="Booking duration extends beyond the selected date")
+
     if not validate_business_hours(booking.start_time, end_time):
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Booking must be within business hours ({BUSINESS_START.strftime('%I:%M %p')} - {BUSINESS_END.strftime('%I:%M %p')}). Your booking would end at {end_time.strftime('%I:%M %p')}."
         )
-    
-    # Check for overlapping bookings from ANY user
-    if check_overlap(db, current_user.id, booking.date, booking.start_time, end_time):
-        # Find the conflicting booking to provide helpful error message
+
+    if check_overlap(db, current_user.id, booking.date, booking.start_time, end_time, org_id=current_org.id):
         conflicting = db.query(Booking).filter(
             and_(
                 Booking.date == booking.date,
+                Booking.organization_id == current_org.id,
                 Booking.status.in_([BookingStatus.pending, BookingStatus.approved]),
                 Booking.start_time < end_time,
                 Booking.end_time > booking.start_time
             )
         ).first()
-        
+
         if conflicting:
             raise HTTPException(
                 status_code=400,
-                detail=f"Time slot unavailable. Conflicts with existing booking from {conflicting.start_time.strftime('%I:%M %p')} to {conflicting.end_time.strftime('%I:%M %p')}. Please choose a different time."
+                detail=f"Time slot unavailable. Conflicts with existing booking from {conflicting.start_time.strftime('%I:%M %p')} to {conflicting.end_time.strftime('%I:%M %p')}."
             )
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="This time slot is not available"
-            )
-    
-    # Create new booking (single record that spans the entire duration)
-    print(f"🔍 DEBUG: Received description: {booking.description}")
-    print(f"🔍 DEBUG: Received company_name: {booking.company_name}")
-    print(f"🔍 DEBUG: Received hr_name: {booking.hr_name}")
-    print(f"🔍 DEBUG: Received mobile_number: {booking.mobile_number}")
-    print(f"🔍 DEBUG: Received email_id: {booking.email_id}")
-    
+        raise HTTPException(status_code=400, detail="This time slot is not available")
+
     new_booking = Booking(
         user_id=current_user.id,
+        organization_id=current_org.id,
         date=booking.date,
         start_time=booking.start_time,
         end_time=end_time,
@@ -178,41 +143,39 @@ def create_booking(
         status=BookingStatus.pending,
         created_at=datetime.now(pytz.timezone('Asia/Kolkata'))
     )
-    
+
     db.add(new_booking)
     db.commit()
     db.refresh(new_booking)
-    
-    print(f"🔍 DEBUG: Stored description in DB: {new_booking.description}")
-    
-    # Load user relationship
+
     db_booking = db.query(Booking).options(
         joinedload(Booking.user)
     ).filter(Booking.id == new_booking.id).first()
-    
-    print(f"✅ Created booking ID {new_booking.id}: {booking.start_time} - {end_time} ({booking.duration_minutes} min)")
-    
+
     return db_booking
 
 
 @router.get("/my-bookings", response_model=list[BookingResponse])
 def my_bookings(
+    request: Request,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_user),
+    current_org: Organization = Depends(get_current_organization)
 ):
-    """Get current user's bookings (excluding those older than 2 days)."""
+    """Get current user's bookings scoped to their organization."""
     expire_pending_bookings(db)
-    
+
     now = datetime.now(pytz.timezone('Asia/Kolkata'))
     two_days_ago = now - timedelta(days=2)
     cutoff_date = two_days_ago.date()
     cutoff_time = two_days_ago.time()
-    
+
     return db.query(Booking).options(
         joinedload(Booking.user)
     ).filter(
         and_(
             Booking.user_id == current_user.id,
+            Booking.organization_id == current_org.id,
             or_(
                 Booking.date > cutoff_date,
                 and_(Booking.date == cutoff_date, Booking.end_time >= cutoff_time)
@@ -223,23 +186,28 @@ def my_bookings(
 
 @router.get("/", response_model=list[BookingResponse])
 def get_all_bookings(
+    request: Request,
     db: Session = Depends(get_db),
-    current_user = Depends(admin_required)
+    current_user = Depends(admin_required),
+    current_org: Organization = Depends(get_current_organization)
 ):
-    """Get all bookings (admin only, excluding those older than 2 days)."""
+    """Get all bookings for the current organization (admin only)."""
     expire_pending_bookings(db)
-    
+
     now = datetime.now(pytz.timezone('Asia/Kolkata'))
     two_days_ago = now - timedelta(days=2)
     cutoff_date = two_days_ago.date()
     cutoff_time = two_days_ago.time()
-    
+
     return db.query(Booking).options(
         joinedload(Booking.user)
     ).filter(
-        or_(
-            Booking.date > cutoff_date,
-            and_(Booking.date == cutoff_date, Booking.end_time >= cutoff_time)
+        and_(
+            Booking.organization_id == current_org.id,
+            or_(
+                Booking.date > cutoff_date,
+                and_(Booking.date == cutoff_date, Booking.end_time >= cutoff_time)
+            )
         )
     ).all()
 
@@ -299,28 +267,28 @@ def reject_booking(
 
 @router.get("/active")
 def get_active_bookings(
+    request: Request,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_user),
+    current_org: Organization = Depends(get_current_organization)
 ):
-    """Get only active (approved and not expired/cancelled) bookings for the current user."""
-    
+    """Get only active approved bookings for the current user in their organization."""
     now = datetime.now(pytz.timezone('Asia/Kolkata'))
     current_date = now.date()
     current_time = now.time()
-    
+
     active_bookings = db.query(Booking).filter(
         and_(
             Booking.user_id == current_user.id,
+            Booking.organization_id == current_org.id,
             Booking.status == BookingStatus.approved,
             or_(
                 Booking.date > current_date,
                 and_(Booking.date == current_date, Booking.end_time >= current_time)
             )
         )
-    ).options(
-        joinedload(Booking.user)
-    ).all()
-    
+    ).options(joinedload(Booking.user)).all()
+
     return {
         "active_count": len(active_bookings),
         "active_bookings": active_bookings
@@ -331,90 +299,72 @@ def get_active_bookings(
 def get_available_times(
     date: dt_date,
     duration_minutes: int,
-    db: Session = Depends(get_db)
+    request: Request,
+    db: Session = Depends(get_db),
+    current_org: Organization = Depends(get_current_organization)
 ):
-    """
-    Get available time slots for a given date and duration (Public endpoint).
-    Returns suggested available times based on existing bookings.
-    Properly handles multi-slot bookings (90 min, 120 min).
-    No authentication required.
-    """
-    
-    # Allow durations: 30, 60, 90, 120 minutes
+    """Get available time slots for a given date and duration (scoped to organization)."""
     allowed_durations = [30, 60, 90, 120]
     if duration_minutes not in allowed_durations:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Duration must be one of {allowed_durations} minutes"
-        )
-    
-    # If date is in the past, return empty list (don't raise error)
+        raise HTTPException(status_code=400, detail=f"Duration must be one of {allowed_durations} minutes")
+
     if date < dt_date.today():
-        return {
-            "date": date,
-            "duration_minutes": duration_minutes,
-            "available_slots": []
-        }
-    
-    # Get all approved/pending bookings on this date (from all users)
+        return {"date": date, "duration_minutes": duration_minutes, "available_slots": []}
+
     existing_bookings = db.query(Booking).filter(
         and_(
             Booking.date == date,
+            Booking.organization_id == current_org.id,
             Booking.status.in_([BookingStatus.pending, BookingStatus.approved])
         )
     ).order_by(Booking.start_time).all()
-    
-    # Generate available slots (every 15 minutes)
+
     available_slots = []
     current_time = datetime.combine(date, BUSINESS_START)
     end_of_day = datetime.combine(date, BUSINESS_END)
-    
+
     while current_time + timedelta(minutes=duration_minutes) <= end_of_day:
         slot_start = current_time.time()
         slot_end = (current_time + timedelta(minutes=duration_minutes)).time()
-        
-        # Check if this slot overlaps with any existing booking
-        # This properly handles multi-slot bookings because we check the full duration
+
         is_available = True
         for booking in existing_bookings:
-            # Overlap check: slot overlaps if it starts before booking ends AND ends after booking starts
             if slot_start < booking.end_time and slot_end > booking.start_time:
                 is_available = False
                 break
-        
+
         if is_available:
             available_slots.append({
                 "start_time": slot_start.strftime("%H:%M"),
                 "end_time": slot_end.strftime("%H:%M")
             })
-        
+
         current_time += timedelta(minutes=15)
-    
-    return {
-        "date": date,
-        "duration_minutes": duration_minutes,
-        "available_slots": available_slots
-    }
+
+    return {"date": date, "duration_minutes": duration_minutes, "available_slots": available_slots}
 
 
 @router.get("/approved-public")
 def get_approved_bookings_public(
-    db: Session = Depends(get_db)
+    request: Request,
+    db: Session = Depends(get_db),
+    current_org: Organization = Depends(get_current_organization)
 ):
     """
-    Get all approved bookings (Public endpoint).
-    Returns only approved bookings without sensitive user information.
+    Get all approved bookings for the current organization (Public endpoint).
     No authentication required.
     """
     
     bookings = (
         db.query(Booking)
-        .filter(Booking.status == BookingStatus.approved)
+        .filter(
+            Booking.status == BookingStatus.approved,
+            Booking.organization_id == current_org.id
+        )
         .order_by(Booking.date, Booking.start_time)
         .all()
     )
     
-    # Return list of dicts with booking_date field for frontend
     result = [
         {
             "id": booking.id,
@@ -424,10 +374,6 @@ def get_approved_bookings_public(
         }
         for booking in bookings
     ]
-    
-    print(f"🔍 DEBUG: Returning {len(result)} approved bookings")
-    if result:
-        print(f"📅 First booking: {result[0]}")
     
     return result
 
@@ -460,20 +406,17 @@ def get_approved_bookings_debug(
 @router.patch("/{booking_id}/cancel")
 def cancel_booking(
     booking_id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_user),
+    current_org: Organization = Depends(get_current_organization)
 ):
-    """
-    Cancel a booking (User can cancel their own, Admin can cancel any).
+    """Cancel a booking (User can cancel their own, Admin can cancel any)."""
     
-    - Changes status to 'cancelled'
-    - Records who cancelled and when
-    - Cannot cancel past bookings
-    - Cannot cancel already cancelled/rejected bookings
-    """
-    
-    # Get booking
-    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    booking = db.query(Booking).filter(
+        Booking.id == booking_id,
+        Booking.organization_id == current_org.id
+    ).first()
     
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")

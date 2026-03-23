@@ -4,12 +4,15 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.models.login_activity import LoginActivity
+from app.models.organization import Organization
 from app.schemas.user import UserCreate, UserLogin, UserResponse
 from app.utils.hash import hash_password, verify_password
 from app.utils.jwt import create_access_token
+from app.utils.dependencies import get_current_organization
 from datetime import datetime
 from user_agents import parse
 import pytz
+import os
 
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -78,14 +81,17 @@ def get_browser_info(request: Request) -> str:
 #     )
 
 @router.post("/login")
-def login(user: UserLogin, request: Request, db: Session = Depends(get_db)):
-    
+def login(
+    user: UserLogin,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_org: Organization = Depends(get_current_organization)
+):
     db_user = db.query(User).filter(User.email == user.email).first()
 
     if not db_user:
         raise HTTPException(status_code=400, detail="Invalid email or password")
 
-    # Check if account is active before password verification
     if not db_user.is_active:
         raise HTTPException(
             status_code=403,
@@ -95,18 +101,18 @@ def login(user: UserLogin, request: Request, db: Session = Depends(get_db)):
     if not verify_password(user.password, db_user.password):
         raise HTTPException(status_code=400, detail="Invalid email or password")
 
+    # Validate user belongs to this organization
+    # Super admins can log in from any org/subdomain
+    if db_user.role.value != "super_admin":
+        if db_user.organization_id != current_org.id:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have access to this organization."
+            )
+
     # Capture IP address and browser info
     ip_address = get_client_ip(request)
     browser_info = get_browser_info(request)
-    
-    # Debug logging
-    print(f"🔍 Login Debug:")
-    print(f"   IP Address: {ip_address}")
-    print(f"   Browser Info: {browser_info}")
-    print(f"   X-Forwarded-For: {request.headers.get('x-forwarded-for')}")
-    print(f"   X-Real-IP: {request.headers.get('x-real-ip')}")
-    print(f"   Client Host: {request.client.host if request.client else 'None'}")
-    print(f"   User-Agent: {request.headers.get('user-agent')}")
 
     # Create access token
     token = create_access_token(
@@ -124,8 +130,6 @@ def login(user: UserLogin, request: Request, db: Session = Depends(get_db)):
     )
     db.add(login_activity)
     db.commit()
-    
-    print(f"✅ Login activity saved: IP={ip_address}, Browser={browser_info}")
 
     return {
         "access_token": token,
@@ -139,7 +143,7 @@ def login_oauth(
     request: Request = None,
     db: Session = Depends(get_db)
 ):
-    """OAuth2 compatible token login for Swagger UI authorization"""
+    """OAuth2 compatible token login for Swagger UI authorization. No org check required."""
     db_user = db.query(User).filter(User.email == form_data.username).first()
 
     if not db_user:

@@ -1,6 +1,24 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from datetime import datetime, date, time
 from typing import Optional, List
+
+
+class CreateOrgAdmin(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+
+
+class OrgAdminResponse(BaseModel):
+    id: int
+    name: str
+    email: str
+    role: str
+    organization_id: Optional[int]
+
+    class Config:
+        from_attributes = True
+
 
 class DashboardStats(BaseModel):
     total_users: int
@@ -8,11 +26,13 @@ class DashboardStats(BaseModel):
     approved_bookings: int
     pending_bookings: int
 
+
 class CompanyAnalytics(BaseModel):
     company_name: str
     total_bookings: int
     approved_bookings: int
     pending_bookings: int
+
 
 class UserBasicInfo(BaseModel):
     id: int
@@ -22,16 +42,28 @@ class UserBasicInfo(BaseModel):
     class Config:
         from_attributes = True
 
+
+class OrgBasicInfo(BaseModel):
+    id: int
+    name: str
+    slug: str
+
+    class Config:
+        from_attributes = True
+
+
 class LoginActivityResponse(BaseModel):
     id: int
     user_id: int
     ip_address: Optional[str]
     user_agent: Optional[str]
     login_time: datetime
-    user: UserBasicInfo
+    user: Optional[UserBasicInfo] = None
+    organization: Optional[OrgBasicInfo] = None
 
     class Config:
         from_attributes = True
+
 
 class BookingUserInfo(BaseModel):
     id: int
@@ -40,6 +72,7 @@ class BookingUserInfo(BaseModel):
 
     class Config:
         from_attributes = True
+
 
 class SuperAdminBookingResponse(BaseModel):
     id: int
